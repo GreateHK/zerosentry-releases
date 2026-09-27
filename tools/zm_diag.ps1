@@ -9,13 +9,16 @@
 #   powershell -NoProfile -ExecutionPolicy Bypass -File C:\ZeroSentry\ZeroMaster\admin_tools\zm_diag.ps1
 #   ... -Hours 72          look further back (default 24)
 #   ... -Zip               also save a masked copy of the logs to the Desktop
+#   ... -Telegram          also send the summary to Telegram (the daily
+#                          ZeroMaster-Daily-Diag task runs it this way at 09:00)
 #
 # Must stay Windows PowerShell 5.1 compatible (no ??, no ternary).
 
 param(
     [string]$ZmDir = "C:\ZeroSentry\ZeroMaster",
     [int]   $Hours = 24,
-    [switch]$Zip
+    [switch]$Zip,
+    [switch]$Telegram
 )
 
 $ErrorActionPreference = "Continue"
@@ -25,6 +28,8 @@ $WatchdogLog  = Join-Path $ZmDir "admin_tools\watchdog.log"
 $Python       = Join-Path $ZmDir "venv\Scripts\python.exe"
 $cutoff       = (Get-Date).AddHours(-$Hours)
 $out          = New-Object System.Collections.Generic.List[string]
+$issues       = New-Object System.Collections.Generic.List[string]   # need a human
+$notes        = New-Object System.Collections.Generic.List[string]   # known / informational
 
 function Hide-Secrets([string]$Text) {
     # Same masking as journal_digest.ps1: query string, JSON/repr, URL userinfo.
@@ -79,12 +84,13 @@ try {
     $fail = "?"
     if (Test-Path $wdState) { $fail = (Get-Content $wdState -Raw | ConvertFrom-Json).failCount }
     Add ("watchdog liveness: {0} (last run {1} min ago, failCount {2}, run limit {3})" -f $verdict, $ageMin, $fail, $limit)
-} catch { Add ("watchdog liveness: n/a ({0})" -f $_.Exception.Message) }
+    if ($verdict -ne 'ok') { $issues.Add("watchdog $verdict") }
+} catch { Add ("watchdog liveness: n/a ({0})" -f $_.Exception.Message); $issues.Add('watchdog status unreadable') }
 try {
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $r = Invoke-WebRequest -Uri "http://127.0.0.1:5001/login" -UseBasicParsing -TimeoutSec 10
     Add ("http :5001/login -> {0} in {1} ms" -f $r.StatusCode, $sw.ElapsedMilliseconds)
-} catch { Add ("http :5001/login -> FAILED: {0}" -f $_.Exception.Message) }
+} catch { Add ("http :5001/login -> FAILED: {0}" -f $_.Exception.Message); $issues.Add('web UI not answering') }
 try {
     $py = @(Get-Process -Name python -ErrorAction SilentlyContinue)
     $exe = Get-Item $Python -ErrorAction SilentlyContinue
@@ -94,6 +100,9 @@ try {
     $free = "?"
     if ($disk) { $free = "{0:N1} GB" -f ($disk.Free / 1GB) }
     Add ("python.exe running: {0}   venv python.exe: {1}   C: free {2}" -f $py.Count, $size, $free)
+    # A 0-byte venv python.exe killed the service on 2026-09-24
+    if (-not $exe -or $exe.Length -lt 100000) { $issues.Add("venv python.exe is $size") }
+    if ($disk -and $disk.Free -lt 5GB) { $issues.Add("C: only $free free") }
 } catch { }
 
 # ---- database: devices, queue, alembic ---------------------------------
@@ -115,7 +124,15 @@ with e.connect() as c:
     try {
         Set-Content -Path $pyFile -Value $code -Encoding ASCII
         $res = & $Python $pyFile 2>&1
-        foreach ($l in $res) { Add ("  " + $l) }
+        $dbOk = $false
+        foreach ($l in $res) {
+            $s = "$l"
+            Add ("  " + $s)
+            if ($s -match '^alembic: ') { $dbOk = $true }
+            if ($s -match '^device (.+) (\S+) OFFLINE last_heartbeat\(UTC\) (.+)$') { $notes.Add(("{0} ({1}) offline, last seen {2} UTC" -f $matches[1], $matches[2], $matches[3])) }
+            if ($s -match 'alerted ([1-9]\d*)') { $notes.Add("$($matches[1]) queue row(s) already alerted as stuck") }
+        }
+        if (-not $dbOk) { $issues.Add('database query failed') }
     } catch { Add ("  db query failed: {0}" -f $_.Exception.Message) }
     finally { Remove-Item -Path $pyFile -ErrorAction SilentlyContinue }
 } else { Add "  venv python not found" }
@@ -129,7 +146,7 @@ if (Test-Path $LogPath) {
         if ($f.LastWriteTime -ge $cutoff) { $lines += Get-Content -Path $f.FullName -ErrorAction SilentlyContinue }
     }
 }
-$groups = @{}; $errCount = 0; $warnCount = 0
+$groups = @{}; $errCount = 0; $warnCount = 0; $wdEvents = $false
 $starts = New-Object System.Collections.Generic.List[string]
 $syncOK = 0; $replayOK = 0; $skipped = 0; $queueWarn = 0
 $expOK = 0; $expRecs = 0; $expFail = 0; $replayed = 0; $alerts = 0; $resolved = 0
@@ -165,6 +182,14 @@ Add ("db_export: {0} OK ({1} recs), {2} fail" -f $expOK, $expRecs, $expFail)
 Add ("replay: {0} replayed batch(es), {1} stuck alert(s), {2} resolved" -f $replayed, $alerts, $resolved)
 if ($lastPending) { Add ("last queue summary: " + ($lastPending -replace '^.* - Pending', 'Pending')) }
 Add ("errors: {0} line(s) in {1} kind(s); other warnings: {2}" -f $errCount, $groups.Count, $warnCount)
+if ($starts.Count -gt 0) { $issues.Add("service restarted $($starts.Count)x") }
+if ($skipped -gt 0) { $issues.Add("$skipped scheduler run(s) skipped/missed") }
+if ($syncOK -eq 0) { $issues.Add('no successful scheduled_sync in window') }
+if ($expFail -gt 0) { $issues.Add("$expFail HRM export failure(s)") }
+if ($alerts -gt 0) { $notes.Add("$alerts stuck-queue alert(s), $resolved resolved") }
+# Unreachable-terminal timeouts are expected while a terminal is off; anything else needs a look
+$otherKinds = @($groups.Keys | Where-Object { -not ($_ -match "HTTPConnectionPool\(host='" -and $_ -match 'timed out|Max retries') })
+if ($otherKinds.Count -gt 0) { $issues.Add("$($otherKinds.Count) other error kind(s)") }
 $top = $groups.GetEnumerator() | Sort-Object { $_.Value.Count } -Descending | Select-Object -First 5
 foreach ($g in $top) {
     $text = $g.Key
@@ -185,13 +210,38 @@ if (Test-Path $WatchdogLog) {
         if ($l -match '(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2})') {
             $t = $null
             try { $t = [datetime]::Parse($matches[1]) } catch { $t = $null }
-            if ($t -and $t -ge $cutoff) { Add ("  " + $l); $shown++ }
+            if ($t -and $t -ge $cutoff) {
+                Add ("  " + $l); $shown++
+                if ($l -match 'Unhealthy|Triggering|FAILED|timed out') { $wdEvents = $true }
+            }
         }
     }
     if ($shown -eq 0) { Add "  none" }
+    if ($wdEvents) { $issues.Add('watchdog saw the web UI fail') }
 } else { Add "  watchdog.log not found" }
 
+# ---- verdict first, so one glance is enough ----------------------------
+$verdictLine = "VERDICT: OK"
+if ($issues.Count -gt 0) { $verdictLine = "VERDICT: ATTENTION - " + ($issues -join '; ') }
+if ($notes.Count -gt 0) { $verdictLine += "`nnote: " + ($notes -join '; ') }
+$out.Insert(1, (Hide-Secrets $verdictLine))
+
 $out | ForEach-Object { Write-Output $_ }
+
+if ($Telegram) {
+    $token  = [Environment]::GetEnvironmentVariable('TELEGRAM_BOT_TOKEN', 'Machine')
+    $chatId = [Environment]::GetEnvironmentVariable('TELEGRAM_CHAT_ID', 'Machine')
+    if ($token -and $chatId) {
+        $text = ($out -join "`n")
+        if ($text.Length -gt 3900) { $text = $text.Substring(0, 3900) + "`n...(truncated)" }
+        $body = @{ chat_id = $chatId; text = $text; disable_web_page_preview = $true } | ConvertTo-Json -Compress
+        try {
+            Invoke-RestMethod -Uri "https://api.telegram.org/bot$token/sendMessage" -Method Post `
+                -ContentType 'application/json; charset=utf-8' -Body ([System.Text.Encoding]::UTF8.GetBytes($body)) | Out-Null
+            Write-Output "telegram: sent"
+        } catch { Write-Output ("telegram: send failed - {0}" -f $_.Exception.Message) }
+    } else { Write-Output "telegram: TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set (machine scope)" }
+}
 
 # ---- optional masked bundle --------------------------------------------
 if ($Zip) {
