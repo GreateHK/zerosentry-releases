@@ -2,7 +2,7 @@
 #  ZeroMaster Admin Tools - one-shot installer / updater
 #
 #  USAGE (paste ONE line into an *Administrator* PowerShell):
-#    iwr -UseBasicParsing "https://raw.githubusercontent.com/GreateHK/zerosentry-releases/main/tools/install_tools.ps1?v=2026.09.27.2" | iex
+#    iwr -UseBasicParsing "https://raw.githubusercontent.com/GreateHK/zerosentry-releases/main/tools/install_tools.ps1?v=2026.09.27.3" | iex
 #
 #  What it does (does NOT touch ZeroMaster itself, no service restart):
 #    1. downloads the admin tools and checks every file's SHA-256
@@ -17,13 +17,13 @@
 #  Runs via `iex`, so: ASCII only, no BOM, never call `exit`.
 # ============================================================
 
-$toolsVersion = '2026.09.27.2'
+$toolsVersion = '2026.09.27.3'
 $baseUrl      = 'https://raw.githubusercontent.com/GreateHK/zerosentry-releases/main/tools'
 $expected = @{
     'health_check.ps1'       = '6e6e12f92d4515fad6461ec3e983a356e244960ae6f8e47632b8ac6a3c98059d'
     'forensics_snapshot.bat' = 'ccba4929ecb5d916ef4b31c42a9a31ccce6d69a40c48d0aaf116c16e90faa485'
     'zm_diag.ps1'            = 'd6f1656b6bb71861517c0fe86e43029f76a50588f8f38c6dbf0add40cdcdc1ad'
-    'journal_digest.ps1'     = 'aa6213b88fd52abdf375524ad5a8948d12b382696802359db1409a1d852f68e3'
+    'journal_digest.ps1'     = '6f41adf5f2b75949cc4662a2fd24b481c4319c5129fc57a0a8806e30fb987f85'
 }
 
 function Write-Step($msg) { Write-Host ""; Write-Host "== $msg" -ForegroundColor Cyan }

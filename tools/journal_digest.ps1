@@ -7,7 +7,7 @@
 # Runs as a scheduled task every 4h (SYSTEM). Reads Telegram creds from
 # machine-scope env vars TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID.
 #
-# Install (on Taiun, Admin PowerShell):
+# Install (on the customer VM, Admin PowerShell):
 #   schtasks /Create /TN "ZeroMaster-Journal-Digest" ^
 #     /TR "powershell -NoProfile -ExecutionPolicy Bypass -File C:\ZeroSentry\ZeroMaster\admin_tools\journal_digest.ps1" ^
 #     /SC HOURLY /MO 4 /RU SYSTEM /RL HIGHEST /F
