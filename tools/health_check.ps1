@@ -32,6 +32,7 @@ $maxFailCount       = 3       # consecutive failures before recovery
 $maxRecoveriesPerDay = 3      # stop auto-recovering beyond this
 $probeTimeoutSec    = 10
 $postRestartWaitSec = 30      # wait after schtasks /Run before verifying
+$forensicsTimeoutSec = 120    # never let forensics block recovery
 
 # --- Load state ---
 $state = @{
@@ -136,8 +137,17 @@ if ($healthy) {
             # 1. Capture forensics FIRST (preserve evidence)
             if (Test-Path $forensicsBat) {
                 try {
-                    Start-Process -FilePath $forensicsBat -Wait -WindowStyle Hidden -ErrorAction Stop
-                    Write-WDLog "Forensics snapshot captured."
+                    # Bounded wait: on 2026-09-24 an unbounded -Wait on this bat hung the
+                    # watchdog for 72h (the bat ended in `pause`), so no recovery ran and
+                    # every later 5-minute run was skipped by IgnoreNew.
+                    $fp = Start-Process -FilePath $forensicsBat -ArgumentList '/nopause' -WindowStyle Hidden -PassThru -ErrorAction Stop
+                    $fp | Wait-Process -Timeout $forensicsTimeoutSec -ErrorAction SilentlyContinue
+                    if (-not $fp.HasExited) {
+                        $fp | Stop-Process -Force -ErrorAction SilentlyContinue
+                        Write-WDLog "Forensics snapshot timed out after ${forensicsTimeoutSec}s - killed, continuing recovery."
+                    } else {
+                        Write-WDLog "Forensics snapshot captured."
+                    }
                 } catch {
                     Write-WDLog "Forensics capture failed: $_"
                 }

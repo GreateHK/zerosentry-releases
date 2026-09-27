@@ -147,4 +147,6 @@ echo ============================================================
 echo.
 echo Zip the whole '%OUT_DIR%' folder and send to developer.
 echo.
-pause
+REM The watchdog runs this hidden with /nopause - a pause there waits forever
+REM (it froze the watchdog for 72h on 2026-09-24).
+if /i not "%~1"=="/nopause" pause

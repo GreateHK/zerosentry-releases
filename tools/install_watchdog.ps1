@@ -8,7 +8,7 @@
 #    setx TELEGRAM_CHAT_ID   "123456789"             /M
 #
 #  USAGE - run in PowerShell as Administrator:
-#    iwr -UseBasicParsing https://raw.githubusercontent.com/johnsontamiwt/zerosentry-releases/main/tools/install_watchdog.ps1 | iex
+#    iwr -UseBasicParsing https://raw.githubusercontent.com/GreateHK/zerosentry-releases/main/tools/install_watchdog.ps1 | iex
 # ============================================================
 
 $ErrorActionPreference = 'Stop'
@@ -68,7 +68,7 @@ try {
 
 # --- Download health_check.ps1 ---
 $scriptPath = Join-Path $toolsDir 'health_check.ps1'
-$url = 'https://raw.githubusercontent.com/johnsontamiwt/zerosentry-releases/main/tools/health_check.ps1'
+$url = 'https://raw.githubusercontent.com/GreateHK/zerosentry-releases/main/tools/health_check.ps1'
 Write-Host "Downloading health_check.ps1..." -ForegroundColor Cyan
 Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $scriptPath
 Write-Host "  -> $scriptPath" -ForegroundColor Green
@@ -77,7 +77,7 @@ Write-Host "  -> $scriptPath" -ForegroundColor Green
 $batPath = Join-Path $toolsDir 'forensics_snapshot.bat'
 if (-not (Test-Path $batPath)) {
     Write-Host "Downloading forensics_snapshot.bat..." -ForegroundColor Cyan
-    Invoke-WebRequest -UseBasicParsing -Uri 'https://raw.githubusercontent.com/johnsontamiwt/zerosentry-releases/main/tools/forensics_snapshot.bat' -OutFile $batPath
+    Invoke-WebRequest -UseBasicParsing -Uri 'https://raw.githubusercontent.com/GreateHK/zerosentry-releases/main/tools/forensics_snapshot.bat' -OutFile $batPath
     Write-Host "  -> $batPath" -ForegroundColor Green
 }
 
@@ -108,7 +108,13 @@ $null = & schtasks.exe /Create `
     /F 2>&1
 
 if ($LASTEXITCODE -ne 0) { throw "Failed to create scheduled task (exit $LASTEXITCODE)." }
-Write-Host "  Task created: runs every 5 min as SYSTEM" -ForegroundColor Green
+
+# schtasks /Create leaves the default 72h run limit. With IgnoreNew, one hung run
+# then blocks every later run for 3 days (happened 2026-09-24..27). Cap it.
+$task = Get-ScheduledTask -TaskName $taskName
+$task.Settings.ExecutionTimeLimit = 'PT10M'
+$null = Set-ScheduledTask -InputObject $task
+Write-Host "  Task created: runs every 5 min as SYSTEM, max 10 min per run" -ForegroundColor Green
 
 # --- Trigger first run immediately ---
 Write-Host "Triggering first run..." -ForegroundColor Cyan

@@ -7,7 +7,7 @@ Compiled patch releases and admin tools for ZeroMaster field upgrades.
 Install on any ZeroMaster deployment (auto-detects install dir):
 
 ```powershell
-iwr -UseBasicParsing https://raw.githubusercontent.com/johnsontamiwt/zerosentry-releases/main/tools/install_tools.ps1 | iex
+iwr -UseBasicParsing "https://raw.githubusercontent.com/GreateHK/zerosentry-releases/main/tools/install_tools.ps1?v=2026.09.27.1" | iex
 ```
 
 ### `tools/forensics_snapshot.bat`
